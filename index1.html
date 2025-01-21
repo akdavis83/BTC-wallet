@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bitcoin Wallet</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+            background-color: #f4f4f4;
+        }
+        .container {
+            max-width: 700px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            margin-top: 10px;
+        }
+          textarea, input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 10px;
+            box-sizing: border-box;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .result {
+             margin-top: 20px;
+        }
+         .key-pair {
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-top: 10px;
+            background-color: #f9f9f9;
+             white-space: pre-wrap; /* Preserve line breaks */
+             word-wrap: break-word; /* Break long words */
+        }
+          .key-display {
+            margin-top: 20px;
+            border: 1px solid #ddd;
+            padding: 10px;
+            background-color: #f9f9f9;
+             white-space: pre-wrap; /* Preserve line breaks */
+            word-wrap: break-word; /* Break long words */
+        }
+         #loadingMessage {
+           font-style: italic;
+           color: #888;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Bitcoin Wallet</h1>
+
+         <h2>Generate New Key Pair</h2>
+        <p id="loadingMessage">Loading necessary libraries...</p>
+         <button id="generateButton" onclick="generateKeyPair()" disabled style="display:none;">Generate Key Pair</button>
+        <div id="keyDisplay" class="key-display"></div>
+         <button id="downloadButton" style="display:none;" onclick="downloadKeys()">Download Keys as JSON</button>
+
+        <h2>Check Balance</h2>
+        <div>
+            <label for="btcAddress">Bitcoin Address:</label>
+            <input type="text" id="btcAddress" placeholder="Enter BTC Address">
+            <div id="btcResult" class="result"></div>
+             <button onclick="checkBalance()">Check Balance</button>
+        </div>
+
+         <h2>Send Bitcoin</h2>
+
+          <div>
+             <label for="senderPrivateKey">Sender Private Key:</label>
+             <textarea  id="senderPrivateKey" placeholder="Enter your private key here (WIF)"></textarea>
+
+              <label for="recipientAddress">Recipient Address:</label>
+             <input type="text" id="recipientAddress" placeholder="Enter Recipient BTC Address">
+
+             <label for="amountToSend">Amount to Send (BTC):</label>
+             <input type="text" id="amountToSend" placeholder="Enter amount to send">
+            <div id="sendResult" class="result"></div>
+             <button onclick="sendBitcoin()">Send BTC</button>
+
+          </div>
+    </div>
+        <script src="lib/js-crypto-ec.min.js"></script>
+        <script src="lib/sha256.min.js"></script>
+        <script src="lib/ripemd160.min.js"></script>
+        <script src="lib/base58.min.js"></script>
+        <script>
+            const CDN_URLS = {
+               "js-crypto-ec": "https://cdn.jsdelivr.net/npm/js-crypto-ec@1.0.10/dist/js-crypto-ec.min.js",
+               "sha256": "https://cdnjs.cloudflare.com/ajax/libs/js-sha256/0.9.0/sha256.min.js",
+                "ripemd160":"https://cdnjs.cloudflare.com/ajax/libs/ripemd160/2.0.2/ripemd160.min.js",
+                 "base58":"https://cdnjs.cloudflare.com/ajax/libs/base58/1.1.0/base58.min.js"
+              }
+
+           let ecc = null;
+           let keyPair = null;
+           let keyData = null;
+
+       function loadScript(url,retries = 3, delay = 2000, isLocalFallback = false) {
+            return new Promise((resolve, reject) => {
+                    const script = document.createElement('script');
+                    script.src = url;
+
+                   if (isLocalFallback){
+                        script.onload = () => {
+                          resolve();
+                        };
+                          script.onerror = () => {
+                             reject(new Error("All script sources failed to load, including local fallback"));
+                            };
+                   }
+                    else{
+                        script.onload = () => {
+                            resolve();
+                        };
+                        script.onerror = () => {
+                            if (retries > 0) {
+                                console.log(`Retrying script load for: ${url}. Retries remaining: ${retries}`);
+                                setTimeout(() => {
+                                  loadScript(url,retries - 1, delay,isLocalFallback)
+                                      .then(resolve)
+                                      .catch(reject);
+                              }, delay);
+                          } else {
+                            reject(new Error(`Script load error for: ${url}`))
+                           }
+                        };
+                    }
+
+                    document.head.append(script);
+                });
+        }
+          async function loadAllLibraries(){
+             try {
+                await Promise.all([
+                  loadScript(CDN_URLS["js-crypto-ec"]),
+                    loadScript(CDN_URLS["sha256"]),
+                    loadScript(CDN_URLS["ripemd160"]),
+                    loadScript(CDN_URLS["base58"])
+                  ]);
+                 console.log("All libraries loaded successfully from CDN");
+                    ecc = window.jscrypto.ec;
+                    document.getElementById('loadingMessage').style.display = 'none';
+                    document.getElementById('generateButton').style.display = 'inline-block';
+                      document.getElementById('generateButton').disabled = false;
+
+                }
+                catch(error){
+                    console.error("Error loading libraries from CDN:", error);
+                       try {
+                           console.log("Attempting to load libraries from local fallbacks");
+                            await Promise.all([
+                                loadScript("lib/js-crypto-ec.min.js",0,0,true),
+                                loadScript("lib/sha256.min.js",0,0,true),
+                                loadScript("lib/ripemd160.min.js",0,0,true),
+                                loadScript("lib/base58.min.js",0,0,true)
+                           ])
+                              console.log("All libraries loaded successfully from local fallback");
+                                 ecc = window.jscrypto.ec;
+                                document.getElementById('loadingMessage').style.display = 'none';
+                                    document.getElementById('generateButton').style.display = 'inline-block';
+                                   document.getElementById('generateButton').disabled = false;
+
+                       } catch (fallbackError){
+                          console.error("Error loading libraries from local fallbacks",fallbackError);
+                           document.getElementById('loadingMessage').textContent = "Failed to load libraries. Please check your internet connection and your local library files.";
+                          document.getElementById('loadingMessage').style.color = 'red';
+                       }
+                 }
+        }
+
+        loadAllLibraries();
+           function generateKeyPair() {
+             if (!ecc) {
+            alert("Libraries are not loaded yet, please wait a little more")
+             return;
+           }
+             const privateKeyBytes = new Uint8Array(32);
+            window.crypto.getRandomValues(privateKeyBytes);
+            const privateKeyHex = Array.from(privateKeyBytes, byte => byte.toString(16).padStart(2, '0')).join('');
+
+
+             const privateKeyBigInt = BigInt("0x" + privateKeyHex);
+           const publicKeyPoint = ecc.multiply(ecc.BASE, privateKeyBigInt);
+           const publicKeyX = publicKeyPoint.x.toString(16).padStart(64,'0');
+            const publicKeyY = publicKeyPoint.y.toString(16).padStart(64,'0');
+            const publicKeyUncompressed = "04" + publicKeyX + publicKeyY; // 0x04 represents uncompressed public key
+
+           const publicKeyBytes = hexToBytes(publicKeyUncompressed);
+
+             const sha256Hash = sha256(publicKeyBytes);
+           const ripemd160Hash = ripemd160(hexToBytes(sha256Hash));
+
+             const extendedRipemd160 = "00" + ripemd160Hash;
+            const checksum = sha256(sha256(hexToBytes(extendedRipemd160))).substring(0,8)
+          const btcAddressBytes = hexToBytes(extendedRipemd160 + checksum)
+
+              const address =  base58.encode(btcAddressBytes);
+
+            keyData = {
+                 privateKey: privateKeyHex,
+                 publicKey: publicKeyUncompressed,
+                 address: address
+            };
+
+            const keyDisplay = document.getElementById('keyDisplay');
+            keyDisplay.innerHTML = `
+                <p><b>Private Key (Hex):</b><br>${privateKeyHex}</p>
+                <p><b>Public Key (Hex Uncompressed):</b><br>${publicKeyUncompressed}</p>
+                <p><b>Bitcoin Address:</b><br>${address}</p>
+            `;
+
+              document.getElementById('downloadButton').style.display = 'inline-block';
+
+
+        }
+
+         function hexToBytes(hex) {
+            const bytes = new Uint8Array(hex.length / 2);
+             for (let i = 0; i < hex.length; i += 2) {
+                bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+            }
+            return bytes;
+        }
+
+        function downloadKeys() {
+         if (keyData) {
+            const jsonString = JSON.stringify(keyData, null, 2);
+            const blob = new Blob([jsonString], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'btc_key_pair.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            } else{
+                 alert("Please generate a key pair first!");
+            }
+         }
+
+
+        // Function to validate Bitcoin addresses using the regex
+         function isValidBitcoinAddress(address) {
+            const btcRegex = /^(bc1|[13])[a-zA-HJ-NP-Z0-9]{25,39}$/;
+            return btcRegex.test(address);
+         }
+
+        async function getBitcoinBalance(address) {
+            if (!isValidBitcoinAddress(address)) {
+                return "Invalid Bitcoin address.";
+            }
+            const apiUrl = `https://blockchain.info/balance?active=${address}`;
+            try {
+                const response = await fetch(apiUrl);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                  const balanceSatoshi = data[address].final_balance;
+                const balanceBTC = balanceSatoshi / 100000000;
+                return `Bitcoin Balance: ${balanceBTC} BTC`;
+            } catch (error) {
+               return  "Error fetching Bitcoin balance: " + error;
+            }
+        }
+
+          async function checkBalance() {
+            const btcAddress = document.getElementById("btcAddress").value;
+           document.getElementById("btcResult").textContent = "Loading...";
+           const btcResult = await getBitcoinBalance(btcAddress);
+            document.getElementById("btcResult").textContent = btcResult;
+          }
+
+       async function sendBitcoin() {
+           const privateKeyWIF = document.getElementById('senderPrivateKey').value;
+           const recipientAddress = document.getElementById('recipientAddress').value;
+           const amountToSendBTC = parseFloat(document.getElementById('amountToSend').value);
+             document.getElementById('sendResult').textContent = "Processing transaction...";
+
+            if (!privateKeyWIF) {
+                 document.getElementById('sendResult').textContent = "Error: Please provide a sender private key";
+                 return;
+            }
+
+            if (!isValidBitcoinAddress(recipientAddress)) {
+                document.getElementById('sendResult').textContent = "Error: Invalid recipient address";
+                return;
+             }
+
+            if (isNaN(amountToSendBTC) || amountToSendBTC <= 0) {
+               document.getElementById('sendResult').textContent = "Error: Invalid amount to send.";
+               return;
+             }
+
+             try {
+                const keyPair = bitcoin.ECPair.fromWIF(privateKeyWIF);
+                const senderAddress = bitcoin.payments.p2pkh({ pubkey: keyPair.publicKey}).address;
+
+                const utxos = await fetchUnspentOutputs(senderAddress);
+
+                if(!utxos || utxos.length === 0){
+                  document.getElementById('sendResult').textContent = "Error: No funds available for this address";
+                   return;
+                }
+                const psbt = await createPsbt(keyPair,recipientAddress,amountToSendBTC,utxos);
+
+                 const signedTransaction = psbt.extractTransaction();
+                 const transactionHex = signedTransaction.toHex();
+
+                const txid = await broadcastTransaction(transactionHex);
+
+                 document.getElementById('sendResult').textContent = `Transaction sent! TXID: ${txid}`;
+
+            } catch (error) {
+                 document.getElementById('sendResult').textContent = `Error sending transaction: ${error.message}`;
+            }
+
+       }
+
+        async function fetchUnspentOutputs(address) {
+            const apiUrl = `https://blockchain.info/unspent?active=${address}`;
+
+            try {
+                const response = await fetch(apiUrl);
+
+                 if (!response.ok) {
+                   throw new Error(`Failed to fetch UTXOs. HTTP status: ${response.status}`);
+                 }
+                  const data = await response.json();
+
+                if (data.unspent_outputs && data.unspent_outputs.length > 0) {
+                     return data.unspent_outputs.map(utxo => ({
+                         txid: utxo.tx_hash_big_endian,
+                         vout: utxo.tx_output_n,
+                          value: utxo.value,
+                      }));
+                } else {
+                  return []; //No UTXOs
+                }
+              } catch (error) {
+                  console.error("Error fetching unspent outputs:", error);
+                  throw error;
+               }
+
+        }
+       async function createPsbt(keyPair, recipientAddress, amountBTC,utxos){
+
+        const amountSatoshi = Math.round(amountBTC * 100000000);
+          const feeRate = 20; // sat/vByte
+        let totalInput = 0;
+         let psbt = new bitcoin.Psbt({ network: bitcoin.networks.bitcoin}); // mainnet
+
+           for(const utxo of utxos){
+               psbt.addInput({
+                 hash: utxo.txid,
+                 index: utxo.vout,
+                 witnessUtxo: {
+                   script: bitcoin.payments.p2pkh({ pubkey: keyPair.publicKey }).output,
+                     value: utxo.value,
+                   }
+               });
+               totalInput += utxo.value;
+           }
+
+          //Recipient output
+
+        psbt.addOutput({
+              address: recipientAddress,
+              value: amountSatoshi,
+          });
+
+
+         const totalFee = (psbt.virtualSize() * feeRate);
+          const changeAmount = totalInput - amountSatoshi - totalFee;
+
+         if (changeAmount > 0){
+            psbt.addOutput({
+             address: bitcoin.payments.p2pkh({ pubkey: keyPair.publicKey}).address,
+              value: changeAmount,
+           });
+
+        } else if(changeAmount <0){
+           throw new Error("Insufficient balance to make this transaction.");
+         }
+
+       psbt.signAllInputs(keyPair);
+        psbt.finalizeAllInputs();
+
+           return psbt;
+        }
+
+       async function broadcastTransaction(transactionHex) {
+         const apiUrl = 'https://blockchain.info/pushtx';
+
+            try {
+                const response = await fetch(apiUrl, {
+                  method: 'POST',
+                  headers: {
+                     'Content-Type': 'application/x-www-form-urlencoded',
+                   },
+                 body: `tx=${transactionHex}`,
+              });
+
+                 if (!response.ok) {
+                     const errorText = await response.text();
+                      throw new Error(`Failed to broadcast transaction. HTTP status: ${response.status}. Error details: ${errorText}`);
+                }
+                const txid = await response.text();
+                return txid;
+
+            } catch (error) {
+                console.error('Error broadcasting transaction', error);
+                 throw error;
+            }
+       }
+        </script>
+</body>
+</html>
